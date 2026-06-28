@@ -16,9 +16,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -39,6 +41,85 @@ type Config struct {
 	Mount    string `mapstructure:"mount"`
 }
 
+// resolveLFSEndpoint 从 Git 仓库的多种配置文件中自动读取 lfs.url。
+// 优先级：
+//  1. 使用 `git config --get lfs.url` 命令（覆盖 .git/config、.lfsconfig、全局配置等）
+//  2. 直接解析 .lfsconfig 文件
+//  3. 直接解析 .git/config 文件
+func resolveLFSEndpoint(repoPath string) (string, error) {
+	// 方法1：使用 git config 命令读取（最全面，覆盖所有配置文件）
+	cmd := exec.Command("git", "config", "--get", "lfs.url")
+	cmd.Dir = repoPath
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = nil
+
+	if err := cmd.Run(); err == nil {
+		if url := strings.TrimSpace(out.String()); url != "" {
+			return url, nil
+		}
+	}
+
+	// 方法2：直接解析 .lfsconfig 文件（LFS 专用配置）
+	lfsConfigPath := filepath.Join(repoPath, ".lfsconfig")
+	if url, err := parseConfigKey(lfsConfigPath, "lfs", "url"); err == nil && url != "" {
+		return url, nil
+	}
+
+	// 方法3：直接解析 .git/config 文件
+	gitConfigPath := filepath.Join(repoPath, ".git", "config")
+	if url, err := parseConfigKey(gitConfigPath, "lfs", "url"); err == nil && url != "" {
+		return url, nil
+	}
+
+	return "", fmt.Errorf("在所有 Git 配置文件中均未找到 lfs.url")
+}
+
+// parseConfigKey 解析类 INI 格式的配置文件，查找指定 section 下的 key 值。
+// 支持格式:
+//
+//	[section]
+//	    key = value
+//	    key=value
+func parseConfigKey(configPath, section, key string) (string, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", err
+	}
+
+	sectionHeader := "[" + section + "]"
+	inSection := false
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		// 跳过空行和注释
+		if trimmed == "" || strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// 检查 section 头: [section]
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inSection = trimmed == sectionHeader
+			continue
+		}
+
+		if inSection {
+			// 匹配 "key" 或 "key = value" 或 "key=value"
+			if strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=") || trimmed == key {
+				eqIdx := strings.Index(trimmed, "=")
+				if eqIdx >= 0 {
+					return strings.TrimSpace(trimmed[eqIdx+1:]), nil
+				}
+				// 只有 key 没有值
+				return "", fmt.Errorf("配置项 %s.%s 没有值", section, key)
+			}
+		}
+	}
+
+	return "", fmt.Errorf("未找到配置项 %s.%s", section, key)
+}
+
 func main() {
 	// ============================================================
 	// 第一步：定义命令行标志
@@ -49,7 +130,7 @@ func main() {
 		showHelp = pflag.BoolP("help", "h", false, "显示帮助信息")
 	)
 	pflag.StringP("repo", "r", "", "Git 仓库路径 (必需)")
-	pflag.StringP("endpoint", "e", "", "LFS 存储服务 HTTP 端点 URL (必需)")
+	pflag.StringP("endpoint", "e", "", "LFS 存储服务 HTTP 端点 URL（可选，默认从 Git 仓库配置自动读取）")
 	pflag.StringP("mount", "m", "", "挂载点目录 (必需)")
 
 	// 自定义帮助信息
@@ -61,7 +142,7 @@ func main() {
 
 Flags:
   -r, --repo PATH         Git 仓库路径（必需）
-  -e, --endpoint URL      LFS 存储服务 HTTP 端点 URL（必需）
+  -e, --endpoint URL      LFS 存储服务 HTTP 端点 URL（可选，默认从 Git 仓库配置读取）
   -m, --mount PATH        挂载点目录（必需）
   -c, --config FILE       配置文件路径（支持 YAML、JSON、TOML 格式）
   -v, --version           显示版本信息
@@ -69,7 +150,7 @@ Flags:
 
 配置文件示例 (config.yaml):
   repo: /path/to/repo
-  endpoint: https://lfs.example.com
+  endpoint: https://lfs.example.com（可选）
   mount: /mnt/lfs
 
 环境变量:
@@ -154,13 +235,23 @@ Flags:
 	// ============================================================
 	// 第四步：验证必需参数
 	// ============================================================
-	if cfg.Repo == "" || cfg.Endpoint == "" || cfg.Mount == "" {
+	if cfg.Repo == "" || cfg.Mount == "" {
 		pflag.Usage()
-		log.Fatalf("错误: 缺少必需参数。请指定 --repo、--endpoint 和 --mount。")
+		log.Fatalf("错误: 缺少必需参数。请指定 --repo 和 --mount。")
 	}
 
 	// 清理 Endpoint 尾部斜杠
 	cfg.Endpoint = strings.TrimRight(cfg.Endpoint, "/")
+
+	// 如果未指定 Endpoint，尝试从 Git 仓库配置自动读取 lfs.url
+	if cfg.Endpoint == "" {
+		endpoint, err := resolveLFSEndpoint(cfg.Repo)
+		if err != nil {
+			log.Fatalf("错误: 未指定 --endpoint 且无法从 Git 仓库配置中自动读取 lfs.url: %v", err)
+		}
+		cfg.Endpoint = endpoint
+		log.Printf("已从 Git 仓库配置自动读取 LFS 端点: %s", cfg.Endpoint)
+	}
 
 	// 确保挂载点目录存在
 	if err := os.MkdirAll(cfg.Mount, 0755); err != nil {
