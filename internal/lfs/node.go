@@ -17,7 +17,7 @@ import (
 // Node 实现 FUSE 文件系统节点，支持普通文件和 LFS 虚拟文件的透明访问。
 //
 // 对于普通文件，Node 直接读取本地磁盘文件内容。
-// 对于 LFS 指针文件，Node 通过 HTTP Range 请求从远程 LFS 存储中获取实际内容，
+// 对于 LFS 指针文件，Node 通过 HTTP Range 请求或 SSH 从远程 LFS 存储中获取实际内容，
 // 使得挂载点上的文件看起来包含实际内容而非 LFS 指针文本。
 type Node struct {
 	fs.Inode
@@ -25,8 +25,8 @@ type Node struct {
 	// localPath 是本地 Git 仓库中对应文件的绝对路径。
 	localPath string
 
-	// lfsURL 是 LFS 存储服务的 HTTP URL。
-	lfsURL string
+	// remoteCfg 是远程 LFS 存储的访问配置，支持 HTTP 和 SSH 协议。
+	remoteCfg *RemoteConfig
 
 	// isDir 标识该节点是否为目录。
 	isDir bool
@@ -40,10 +40,10 @@ type Node struct {
 }
 
 // NewNode 创建一个新的 LFS 节点。
-func NewNode(localPath, lfsURL string, isDir bool, size int64, lfsOID string) *Node {
+func NewNode(localPath string, remoteCfg *RemoteConfig, isDir bool, size int64, lfsOID string) *Node {
 	return &Node{
 		localPath: localPath,
-		lfsURL:    lfsURL,
+		remoteCfg: remoteCfg,
 		isDir:     isDir,
 		size:      size,
 		lfsOID:    lfsOID,
@@ -72,8 +72,8 @@ func (n *Node) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFl
 // Read 读取文件内容。
 //
 // 对于普通文件，直接从本地磁盘读取。
-// 对于 LFS 文件，通过 HTTP Range 请求从远程 LFS 端点获取指定范围的数据，
-// 支持部分读取（适用于流式播放、压缩归档等场景）。
+// 对于 LFS 文件，根据远程配置通过 HTTP Range 请求或 SSH 从远程 LFS 存储获取
+// 指定范围的数据，支持部分读取（适用于流式播放、压缩归档等场景）。
 func (n *Node) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	if n.lfsOID == "" {
 		return n.readLocalFile(dest, off)
@@ -96,18 +96,37 @@ func (n *Node) readLocalFile(dest []byte, off int64) (fuse.ReadResult, syscall.E
 	return fuse.ReadResultData(dest), 0
 }
 
-// readLFSFile 通过 HTTP Range 请求从远程 LFS 端点读取数据。
+// readLFSFile 根据远程配置类型从远程 LFS 端点读取数据。
+// 支持 HTTP Range 请求和 SSH 两种传输方式。
 func (n *Node) readLFSFile(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	if off >= n.size {
 		return fuse.ReadResultData([]byte{}), 0
 	}
 
+	if n.remoteCfg == nil {
+		log.Printf("错误: 未配置远程 LFS 访问地址")
+		return nil, syscall.EIO
+	}
+
+	switch n.remoteCfg.Type {
+	case RemoteHTTP:
+		return n.readLFSFileHTTP(ctx, dest, off)
+	case RemoteSSH:
+		return n.readLFSFileSSH(ctx, dest, off)
+	default:
+		log.Printf("错误: 不支持的远程访问类型: %v", n.remoteCfg.Type)
+		return nil, syscall.EIO
+	}
+}
+
+// readLFSFileHTTP 通过 HTTP Range 请求从远程 LFS 端点读取数据。
+func (n *Node) readLFSFileHTTP(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	end := off + int64(len(dest)) - 1
 	if end >= n.size {
 		end = n.size - 1
 	}
 
-	url := fmt.Sprintf("%s/%s", n.lfsURL, n.lfsOID)
+	url := fmt.Sprintf("%s/%s", n.remoteCfg.HTTPURL, n.lfsOID)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, syscall.EIO
@@ -135,4 +154,14 @@ func (n *Node) readLFSFile(ctx context.Context, dest []byte, off int64) (fuse.Re
 	}
 
 	return fuse.ReadResultData(dest[:nBytes]), 0
+}
+
+// readLFSFileSSH 通过 SSH 从远程服务器读取 LFS 对象的指定范围数据。
+func (n *Node) readLFSFileSSH(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	data, err := ReadLFSFileSSH(ctx, n.remoteCfg.SSH, n.lfsOID, dest, off, n.size)
+	if err != nil {
+		log.Printf("LFS SSH 读取失败 %s: %v", filepath.Base(n.localPath), err)
+		return nil, syscall.EIO
+	}
+	return fuse.ReadResultData(data), 0
 }

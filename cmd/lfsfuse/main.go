@@ -130,7 +130,7 @@ func main() {
 		showHelp = pflag.BoolP("help", "h", false, "显示帮助信息")
 	)
 	pflag.StringP("repo", "r", "", "Git 仓库路径 (必需)")
-	pflag.StringP("lfsurl", "u", "", "LFS 存储服务 HTTP URL（可选，默认从 Git 仓库配置自动读取）")
+	pflag.StringP("lfsurl", "u", "", "LFS 存储服务 URL（支持 HTTP/HTTPS 和 SSH 协议，可选，默认从 Git 仓库配置自动读取或推断 SSH remote）")
 	pflag.StringP("mount", "m", "", "挂载点目录 (必需)")
 
 	// 自定义帮助信息
@@ -142,7 +142,9 @@ func main() {
 
 Flags:
   -r, --repo PATH         Git 仓库路径（必需）
-  -u, --lfsurl URL        LFS 存储服务 HTTP URL（可选，默认从 Git 仓库配置读取）
+  -u, --lfsurl URL        LFS 存储服务 URL（支持 HTTP/HTTPS 和 SSH 协议，可选）
+                          默认从 Git 仓库 lfs.url 配置读取；
+                          若未配置 lfs.url，则尝试从 remote origin 推断 SSH 地址
   -m, --mount PATH        挂载点目录（必需）
   -c, --config FILE       配置文件路径（支持 YAML、JSON、TOML 格式）
   -v, --version           显示版本信息
@@ -150,7 +152,8 @@ Flags:
 
 配置文件示例 (config.yaml):
   repo: /path/to/repo
-  lfsurl: https://lfs.example.com（可选）
+  lfsurl: https://lfs.example.com
+  # lfsurl: ssh://git@example.com/srv/git/repo.git   # 也支持 SSH 协议
   mount: /mnt/lfs
 
 环境变量:
@@ -243,14 +246,42 @@ Flags:
 	// 清理 LfsURL 尾部斜杠
 	cfg.LfsURL = strings.TrimRight(cfg.LfsURL, "/")
 
-	// 如果未指定 LfsURL，尝试从 Git 仓库配置自动读取 lfs.url
-	if cfg.LfsURL == "" {
-		lfsurl, err := resolveLFSURL(cfg.Repo)
-		if err != nil {
-			log.Fatalf("错误: 未指定 --lfsurl 且无法从 Git 仓库配置中自动读取 lfs.url: %v", err)
+	// ============================================================
+	// 第五步：解析远程 LFS 访问配置
+	// 优先级：
+	//   1. 命令行 --lfsurl / 配置文件 lfsurl / 环境变量 LFSFUSE_LFSURL
+	//   2. Git 仓库配置 lfs.url
+	//   3. Git remote origin URL（SSH 协议推断）
+	// ============================================================
+	var remoteCfg *lfs.RemoteConfig
+
+	if cfg.LfsURL != "" {
+		// 用户显式指定了 URL（HTTP/HTTPS 或 SSH）
+		parsed := lfs.ParseURL(cfg.LfsURL)
+		remoteCfg = &parsed
+		log.Printf("已使用指定的 LFS URL: %s", cfg.LfsURL)
+	} else {
+		// 尝试从 Git 仓库配置读取 lfs.url
+		if lfsurl, err := resolveLFSURL(cfg.Repo); err == nil {
+			cfg.LfsURL = lfsurl
+			parsed := lfs.ParseURL(cfg.LfsURL)
+			remoteCfg = &parsed
+			log.Printf("已从 Git 仓库配置自动读取 LFS URL: %s", cfg.LfsURL)
+		} else {
+			// 尝试从 Git remote origin 推断 SSH 远程地址
+			log.Println("未找到 lfs.url 配置，尝试从 Git remote origin 推断 SSH 远程地址...")
+			if remoteURL, err := lfs.DetectGitRemoteURL(cfg.Repo); err == nil {
+				if lfs.IsSSHURL(remoteURL) {
+					parsed := lfs.ParseURL(remoteURL)
+					remoteCfg = &parsed
+					log.Printf("已从 Git remote origin 推断 SSH 远程地址: %s", remoteURL)
+				} else {
+					log.Fatalf("错误: Git remote origin URL（%s）不是 SSH 协议，无法自动推断", remoteURL)
+				}
+			} else {
+				log.Fatalf("错误: 未指定 --lfsurl，且无法从 Git 仓库配置或 remote origin 获取 LFS 访问地址: %v", err)
+			}
 		}
-		cfg.LfsURL = lfsurl
-		log.Printf("已从 Git 仓库配置自动读取 LFS URL: %s", cfg.LfsURL)
 	}
 
 	// 确保挂载点目录存在
@@ -264,9 +295,9 @@ Flags:
 	}
 
 	// ============================================================
-	// 第五步：FUSE 挂载
+	// 第六步：FUSE 挂载
 	// ============================================================
-	rootNode := lfs.NewNode(cfg.Repo, cfg.LfsURL, true, 0, "")
+	rootNode := lfs.NewNode(cfg.Repo, remoteCfg, true, 0, "")
 
 	server, err := fs.Mount(cfg.Mount, rootNode, &fs.Options{
 		MountOptions: fuse.MountOptions{

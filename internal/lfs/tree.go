@@ -48,7 +48,7 @@ func (n *Node) BuildTree() error {
 
 // buildDirNode 为目录创建 FUSE 节点并递归构建子树。
 func (n *Node) buildDirNode(name, localPath string) error {
-	childNode := NewNode(localPath, n.lfsURL, true, 0, "")
+	childNode := NewNode(localPath, n.remoteCfg, true, 0, "")
 	child := n.NewPersistentInode(context.Background(), childNode, fs.StableAttr{Mode: syscall.S_IFDIR})
 	n.AddChild(name, child, true)
 
@@ -84,7 +84,7 @@ func (n *Node) buildFileNode(name, localPath string) error {
 		fileSize = fi.Size()
 	}
 
-	childNode := NewNode(localPath, n.lfsURL, false, fileSize, oid)
+	childNode := NewNode(localPath, n.remoteCfg, false, fileSize, oid)
 	child := n.NewPersistentInode(context.Background(), childNode, fs.StableAttr{Mode: syscall.S_IFREG})
 	n.AddChild(name, child, true)
 	return nil
