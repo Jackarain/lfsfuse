@@ -1,0 +1,22 @@
+# 编译产物
+/bin/
+*.exe
+*.test
+*.out
+
+# IDE 和编辑器
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时挂载点（用户可自定义，添加典型路径避免误提交）
+/mnt/
+
+# 构建缓存
+/tmp/

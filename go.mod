@@ -1,4 +1,4 @@
-module git-lfs-fuse
+module lfsfuse
 
 go 1.26.4
 
