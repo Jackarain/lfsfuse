@@ -129,17 +129,60 @@ httpd 的特点：
 
 ## 使用指南
 
-### 基本用法
+### 命令行选项
+
+LFSFuse 支持多种参数传递方式，按优先级从高到低为：
+**命令行标志 > 环境变量 > 配置文件 > 默认值**
 
 ```bash
-lfsfuse <git_repo_path> <lfs_http_endpoint> <mount_point>
+lfsfuse [flags]
 ```
 
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `git_repo_path` | 本地 Git 仓库路径 | `/home/user/my-repo`，存储指针文件即可，无需拉取 LFS 真实数据 |
-| `lfs_http_endpoint` | LFS 存储服务的 HTTP 端点 URL | `https://lfs.example.com` |
-| `mount_point` | 挂载点目录 | `/mnt/lfs` |
+| 标志 | 简写 | 说明 | 必需 |
+|------|------|------|------|
+| `--repo` | `-r` | 本地 Git 仓库路径 | ✅ |
+| `--endpoint` | `-e` | LFS 存储服务的 HTTP 端点 URL | ✅ |
+| `--mount` | `-m` | 挂载点目录 | ✅ |
+| `--config` | `-c` | 配置文件路径（YAML/JSON/TOML） | ❌ |
+| `--version` | `-v` | 显示版本信息 | ❌ |
+| `--help` | `-h` | 显示帮助信息 | ❌ |
+
+### 配置文件
+
+LFSFuse 支持从配置文件中读取参数。配置文件可选用 YAML、JSON 或 TOML 格式。
+
+**配置文件示例 (config.yaml)：**
+
+```yaml
+repo: /path/to/git-repo
+endpoint: https://lfs.example.com
+mount: /mnt/lfs
+```
+
+**使用方式：**
+
+```bash
+# 显式指定配置文件
+lfsfuse --config ./config.yaml
+
+# 自动查找：程序会自动查找以下路径的 .lfsfuserc 文件
+# - 当前目录的 .lfsfuserc
+# - $HOME/.lfsfuserc
+# - /etc/lfsfuse/.lfsfuserc
+```
+
+也可使用 JSON 格式 (`config.json`) 或 TOML 格式 (`config.toml`)。
+
+### 环境变量
+
+所有参数也可以通过环境变量设置，前缀为 `LFSFUSE_`：
+
+```bash
+export LFSFUSE_REPO=/path/to/git-repo
+export LFSFUSE_ENDPOINT=https://lfs.example.com
+export LFSFUSE_MOUNT=/mnt/lfs
+lfsfuse
+```
 
 ### 完整示例
 
@@ -151,7 +194,12 @@ httpd -listen "[::0]:8080" --path ./lfs-storage
 
 # 2. 创建挂载点并启动 LFSFuse（终端 2）
 mkdir -p /mnt/lfs
-lfsfuse /path/to/git-repo http://localhost:8080 /mnt/lfs
+
+# 方式 A：使用命令行标志（推荐）
+lfsfuse --repo /path/to/git-repo --endpoint http://localhost:8080 --mount /mnt/lfs
+
+# 方式 B：使用配置文件
+lfsfuse --config ./lfs-config.yaml
 
 # 3. 在另一个终端中访问文件（终端 3）
 ls -la /mnt/lfs/
@@ -183,7 +231,7 @@ cd lfsfuse
 make build
 
 # 运行（需要准备测试仓库和 LFS 端点）
-./bin/lfsfuse /path/to/test-repo https://lfs.example.com /mnt/lfs
+./bin/lfsfuse --repo /path/to/test-repo --endpoint https://lfs.example.com --mount /mnt/lfs
 ```
 
 ### 测试

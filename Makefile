@@ -51,7 +51,8 @@ vet:
 
 run: build
 	@echo ">>> 启动 $(BINARY_NAME) (示例用法)..."
-	@echo "    用法: $(OUTPUT_DIR)/$(BINARY_NAME) <git_repo_path> <lfs_endpoint> <mount_point>"
+	@echo "    用法: $(OUTPUT_DIR)/$(BINARY_NAME) --repo <path> --endpoint <url> --mount <path>"
+	@echo "    配置文件: $(OUTPUT_DIR)/$(BINARY_NAME) --config <config_file>"
 
 help:
 	@echo "LFSFuse 构建系统"
