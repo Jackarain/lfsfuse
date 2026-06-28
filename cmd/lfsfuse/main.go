@@ -10,7 +10,7 @@
 //
 // 示例:
 //
-//	lfsfuse --repo /path/to/repo --endpoint https://lfs.example.com --mount /mnt/lfs
+//	lfsfuse --repo /path/to/repo --lfsurl https://lfs.example.com --mount /mnt/lfs
 //	lfsfuse -r /path/to/repo -e https://lfs.example.com -m /mnt/lfs
 //	lfsfuse --config ./config.yaml
 package main
@@ -36,17 +36,17 @@ const appVersion = "1.0.0"
 
 // Config 存储所有配置项，支持配置文件、环境变量和命令行参数。
 type Config struct {
-	Repo     string `mapstructure:"repo"`
-	Endpoint string `mapstructure:"endpoint"`
-	Mount    string `mapstructure:"mount"`
+	Repo   string `mapstructure:"repo"`
+	LfsURL string `mapstructure:"lfsurl"`
+	Mount  string `mapstructure:"mount"`
 }
 
-// resolveLFSEndpoint 从 Git 仓库的多种配置文件中自动读取 lfs.url。
+// resolveLFSURL 从 Git 仓库的多种配置文件中自动读取 lfs.url。
 // 优先级：
 //  1. 使用 `git config --get lfs.url` 命令（覆盖 .git/config、.lfsconfig、全局配置等）
 //  2. 直接解析 .lfsconfig 文件
 //  3. 直接解析 .git/config 文件
-func resolveLFSEndpoint(repoPath string) (string, error) {
+func resolveLFSURL(repoPath string) (string, error) {
 	// 方法1：使用 git config 命令读取（最全面，覆盖所有配置文件）
 	cmd := exec.Command("git", "config", "--get", "lfs.url")
 	cmd.Dir = repoPath
@@ -130,7 +130,7 @@ func main() {
 		showHelp = pflag.BoolP("help", "h", false, "显示帮助信息")
 	)
 	pflag.StringP("repo", "r", "", "Git 仓库路径 (必需)")
-	pflag.StringP("endpoint", "e", "", "LFS 存储服务 HTTP 端点 URL（可选，默认从 Git 仓库配置自动读取）")
+	pflag.StringP("lfsurl", "u", "", "LFS 存储服务 HTTP URL（可选，默认从 Git 仓库配置自动读取）")
 	pflag.StringP("mount", "m", "", "挂载点目录 (必需)")
 
 	// 自定义帮助信息
@@ -142,7 +142,7 @@ func main() {
 
 Flags:
   -r, --repo PATH         Git 仓库路径（必需）
-  -e, --endpoint URL      LFS 存储服务 HTTP 端点 URL（可选，默认从 Git 仓库配置读取）
+  -u, --lfsurl URL        LFS 存储服务 HTTP URL（可选，默认从 Git 仓库配置读取）
   -m, --mount PATH        挂载点目录（必需）
   -c, --config FILE       配置文件路径（支持 YAML、JSON、TOML 格式）
   -v, --version           显示版本信息
@@ -150,11 +150,11 @@ Flags:
 
 配置文件示例 (config.yaml):
   repo: /path/to/repo
-  endpoint: https://lfs.example.com（可选）
+  lfsurl: https://lfs.example.com（可选）
   mount: /mnt/lfs
 
 环境变量:
-  LFSFUSE_REPO, LFSFUSE_ENDPOINT, LFSFUSE_MOUNT
+  LFSFUSE_REPO, LFSFUSE_LFSURL, LFSFUSE_MOUNT
 
 `,
 			appVersion,
@@ -187,10 +187,10 @@ Flags:
 
 	// 设置默认值
 	v.SetDefault("repo", "")
-	v.SetDefault("endpoint", "")
+	v.SetDefault("lfsurl", "")
 	v.SetDefault("mount", "")
 
-	// 绑定环境变量（LFSFUSE_REPO, LFSFUSE_ENDPOINT, LFSFUSE_MOUNT）
+	// 绑定环境变量（LFSFUSE_REPO, LFSFUSE_LFSURL, LFSFUSE_MOUNT）
 	v.SetEnvPrefix("LFSFUSE")
 	v.AutomaticEnv()
 
@@ -217,7 +217,7 @@ Flags:
 	if err := v.BindPFlag("repo", pflag.Lookup("repo")); err != nil {
 		log.Fatalf("绑定标志失败: %v", err)
 	}
-	if err := v.BindPFlag("endpoint", pflag.Lookup("endpoint")); err != nil {
+	if err := v.BindPFlag("lfsurl", pflag.Lookup("lfsurl")); err != nil {
 		log.Fatalf("绑定标志失败: %v", err)
 	}
 	if err := v.BindPFlag("mount", pflag.Lookup("mount")); err != nil {
@@ -240,17 +240,17 @@ Flags:
 		log.Fatalf("错误: 缺少必需参数。请指定 --repo 和 --mount。")
 	}
 
-	// 清理 Endpoint 尾部斜杠
-	cfg.Endpoint = strings.TrimRight(cfg.Endpoint, "/")
+	// 清理 LfsURL 尾部斜杠
+	cfg.LfsURL = strings.TrimRight(cfg.LfsURL, "/")
 
-	// 如果未指定 Endpoint，尝试从 Git 仓库配置自动读取 lfs.url
-	if cfg.Endpoint == "" {
-		endpoint, err := resolveLFSEndpoint(cfg.Repo)
+	// 如果未指定 LfsURL，尝试从 Git 仓库配置自动读取 lfs.url
+	if cfg.LfsURL == "" {
+		lfsurl, err := resolveLFSURL(cfg.Repo)
 		if err != nil {
-			log.Fatalf("错误: 未指定 --endpoint 且无法从 Git 仓库配置中自动读取 lfs.url: %v", err)
+			log.Fatalf("错误: 未指定 --lfsurl 且无法从 Git 仓库配置中自动读取 lfs.url: %v", err)
 		}
-		cfg.Endpoint = endpoint
-		log.Printf("已从 Git 仓库配置自动读取 LFS 端点: %s", cfg.Endpoint)
+		cfg.LfsURL = lfsurl
+		log.Printf("已从 Git 仓库配置自动读取 LFS URL: %s", cfg.LfsURL)
 	}
 
 	// 确保挂载点目录存在
@@ -266,7 +266,7 @@ Flags:
 	// ============================================================
 	// 第五步：FUSE 挂载
 	// ============================================================
-	rootNode := lfs.NewNode(cfg.Repo, cfg.Endpoint, true, 0, "")
+	rootNode := lfs.NewNode(cfg.Repo, cfg.LfsURL, true, 0, "")
 
 	server, err := fs.Mount(cfg.Mount, rootNode, &fs.Options{
 		MountOptions: fuse.MountOptions{

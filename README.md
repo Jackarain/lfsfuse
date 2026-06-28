@@ -125,7 +125,7 @@ httpd 的特点：
 - **支持 HTTP Range**，完美适配 LFSFuse 的按需读取
 - **高性能**，适合生产环境使用
 
-启动 httpd 后，即可将其地址作为 LFSFuse 的 `<lfs_http_endpoint>` 参数使用。
+启动 httpd 后，即可将其地址作为 LFSFuse 的 `--lfsurl` 参数使用。
 
 ## 使用指南
 
@@ -141,7 +141,7 @@ lfsfuse [flags]
 | 标志 | 简写 | 说明 | 必需 |
 |------|------|------|------|
 | `--repo` | `-r` | 本地 Git 仓库路径 | ✅ |
-| `--endpoint` | `-e` | LFS 存储服务的 HTTP 端点 URL | ✅ |
+| `--lfsurl` | `-u` | LFS 存储服务的 HTTP URL | ❌（可选，默认从 Git 仓库配置读取） |
 | `--mount` | `-m` | 挂载点目录 | ✅ |
 | `--config` | `-c` | 配置文件路径（YAML/JSON/TOML） | ❌ |
 | `--version` | `-v` | 显示版本信息 | ❌ |
@@ -155,7 +155,7 @@ LFSFuse 支持从配置文件中读取参数。配置文件可选用 YAML、JSON
 
 ```yaml
 repo: /path/to/git-repo
-endpoint: https://lfs.example.com
+lfsurl: https://lfs.example.com
 mount: /mnt/lfs
 ```
 
@@ -179,7 +179,7 @@ lfsfuse --config ./config.yaml
 
 ```bash
 export LFSFUSE_REPO=/path/to/git-repo
-export LFSFUSE_ENDPOINT=https://lfs.example.com
+export LFSFUSE_LFSURL=https://lfs.example.com
 export LFSFUSE_MOUNT=/mnt/lfs
 lfsfuse
 ```
@@ -196,7 +196,7 @@ httpd -listen "[::0]:8080" --path ./lfs-storage
 mkdir -p /mnt/lfs
 
 # 方式 A：使用命令行标志（推荐）
-lfsfuse --repo /path/to/git-repo --endpoint http://localhost:8080 --mount /mnt/lfs
+lfsfuse --repo /path/to/git-repo --lfsurl http://localhost:8080 --mount /mnt/lfs
 
 # 方式 B：使用配置文件
 lfsfuse --config ./lfs-config.yaml
@@ -231,7 +231,7 @@ cd lfsfuse
 make build
 
 # 运行（需要准备测试仓库和 LFS 端点）
-./bin/lfsfuse --repo /path/to/test-repo --endpoint https://lfs.example.com --mount /mnt/lfs
+./bin/lfsfuse --repo /path/to/test-repo --lfsurl https://lfs.example.com --mount /mnt/lfs
 ```
 
 ### 测试
@@ -298,7 +298,7 @@ LFSFuse 使用 FUSE 的只读挂载选项，确保：
 ### Q: 为什么挂载后 LFS 文件大小为 0？
 
 A: 请确认 LFS 端点 URL 正确，并且网络可以访问该端点。LFSFuse 解析指针文件后，文件大小来自指针文件中的 `size` 字段。
-本质上，只要是符合 LFS 的指针文件，即使不是 git 仓库，只要 `<lfs_http_endpoint>` 参数所在的服务器 `http` 服务下 `oid` 的文件，就可以正常工作。
+本质上，只要是符合 LFS 的指针文件，即使不是 git 仓库，只要 `--lfsurl` 参数所在的服务器 `http` 服务下 `oid` 的文件，就可以正常工作。
 
 ### Q: 支持写入文件吗？
 

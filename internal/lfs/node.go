@@ -25,8 +25,8 @@ type Node struct {
 	// localPath 是本地 Git 仓库中对应文件的绝对路径。
 	localPath string
 
-	// lfsEndpoint 是 LFS 存储服务的 HTTP 端点 URL。
-	lfsEndpoint string
+	// lfsURL 是 LFS 存储服务的 HTTP URL。
+	lfsURL string
 
 	// isDir 标识该节点是否为目录。
 	isDir bool
@@ -40,13 +40,13 @@ type Node struct {
 }
 
 // NewNode 创建一个新的 LFS 节点。
-func NewNode(localPath, lfsEndpoint string, isDir bool, size int64, lfsOID string) *Node {
+func NewNode(localPath, lfsURL string, isDir bool, size int64, lfsOID string) *Node {
 	return &Node{
-		localPath:   localPath,
-		lfsEndpoint: lfsEndpoint,
-		isDir:       isDir,
-		size:        size,
-		lfsOID:      lfsOID,
+		localPath: localPath,
+		lfsURL:    lfsURL,
+		isDir:     isDir,
+		size:      size,
+		lfsOID:    lfsOID,
 	}
 }
 
@@ -107,7 +107,7 @@ func (n *Node) readLFSFile(ctx context.Context, dest []byte, off int64) (fuse.Re
 		end = n.size - 1
 	}
 
-	url := fmt.Sprintf("%s/%s", n.lfsEndpoint, n.lfsOID)
+	url := fmt.Sprintf("%s/%s", n.lfsURL, n.lfsOID)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, syscall.EIO
