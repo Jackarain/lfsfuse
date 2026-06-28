@@ -28,6 +28,7 @@
 - [技术细节](#技术细节)
   - [LFS 指针解析](#lfs-指针解析)
   - [HTTP Range 请求](#http-range-请求)
+  - [SSH 协议支持](#ssh-协议支持)
   - [只读挂载](#只读挂载)
 - [常见问题](#常见问题)
 - [许可证](#许可证)
@@ -51,7 +52,7 @@ LFSFuse 的工作原理如下：
 3. **解析阶段**：检测每个文件是否为 LFS 指针文件。若是，则解析出 OID 和原始大小。
 4. **访问阶段**：当用户读取文件时：
    - **普通文件**：直接从本地磁盘读取。
-   - **LFS 文件**：通过 HTTP `Range` 请求从远程 LFS 端点获取指定范围的数据，实现透明访问。
+   - **LFS 文件**：根据远程配置通过 HTTP `Range` 请求或 SSH 协议从远程 LFS 存储获取指定范围的数据，实现透明访问。
 
 ```
 ┌───────────────┐      ┌──────────────┐      ┌─────────────────┐
@@ -59,27 +60,28 @@ LFSFuse 的工作原理如下：
 │  cat/less/vim │      │  /mnt/lfs    │      │  用户空间驱动   │
 └───────────────┘      └──────────────┘      └────────┬────────┘
                                                       │
-                          ┌───────────────────────────┼──────────┐
-                          │                           │          │
-                          ▼                           ▼          │
-                   ┌────────────┐             ┌──────────────┐   │
-                   │  普通文件  │             │  LFS 文件    │   │
-                   │  本地读取  │             │  HTTP Range  │   │
-                   └────────────┘             │  远程获取    │   │
-                                              └──────────────┘   │
-                          ┌──────────────────────────────────────┘
+                          ┌───────────────────────────┼──────────────┐
+                          │                           │              │
+                          ▼                           ▼              │
+                   ┌────────────┐             ┌──────────────────┐   │
+                   │  普通文件  │             │  LFS 文件        │   │
+                   │  本地读取  │             │  HTTP Range / SSH│   │
+                   └────────────┘             │  远程获取        │   │
+                                              └──────────────────┘   │
+                          ┌──────────────────────────────────────────┘
                           ▼
-                   ┌──────────────┐
-                   │ LFS 存储服务 │
-                   │  httpd 服务  │
-                   └──────────────┘
+                   ┌──────────────────┐
+                   │ LFS 存储服务     │
+                   │ HTTP / SSH 协议  │
+                   └──────────────────┘
 ```
 
 ## 功能特性
 
 - ✅ **透明访问** — LFS 文件在挂载点中表现为包含实际内容的普通文件
+- ✅ **双协议支持** — 支持 HTTP/HTTPS 和 SSH 两种协议访问远程 LFS 存储
 - ✅ **只读安全** — 文件系统以只读模式挂载，防止意外修改
-- ✅ **部分读取** — 支持 HTTP Range 请求，适用于流式播放和大文件预览
+- ✅ **部分读取** — 支持 HTTP Range 请求及 SSH 范围读取，适用于流式播放和大文件预览
 - ✅ **零依赖部署** — 单二进制文件，无需安装 FUSE 库（Linux 内核内置支持）
 - ✅ **内存高效** — 不缓存文件内容到内存，按需从远程获取
 - ✅ **广泛兼容** — 兼容任何标准 Git LFS 存储服务
@@ -118,14 +120,27 @@ go install github.com/Jackarain/lfsfuse/cmd/lfsfuse@latest
 
 ### 搭建 LFS 存储服务（推荐）
 
-LFSFuse 需要配合一个支持 HTTP Range 请求的 LFS 对象存储服务使用。推荐使用 [httpd](https://github.com/avplayer/httpd) — 一个轻量级、高性能的 HTTP 文件存储服务器，专为 Git LFS 场景设计
+LFSFuse 需要配合一个 LFS 对象存储服务使用。根据访问协议的不同，有以下两种方式：
 
-httpd 的特点：
+**方式一：HTTP/HTTPS 协议**
+
+推荐使用 [httpd](https://github.com/avplayer/httpd) — 一个轻量级、高性能的 HTTP 文件存储服务器，专为 Git LFS 场景设计：
+
 - **单二进制**，零外部依赖，部署简便
 - **支持 HTTP Range**，完美适配 LFSFuse 的按需读取
 - **高性能**，适合生产环境使用
 
-启动 httpd 后，即可将其地址作为 LFSFuse 的 `--lfsurl` 参数使用。
+启动 httpd 后，即可将其 HTTP 地址作为 LFSFuse 的 `--lfsurl` 参数使用。
+
+**方式二：SSH 协议**
+
+若使用 SSH 协议，则无需额外部署存储服务。LFSFuse 通过 SSH 直接访问远程服务器上的 Git 仓库路径，复用 Git 自带的 SSH 传输能力。只需使用 `ssh://` 格式的 URL 即可：
+
+```bash
+lfsfuse --repo /path/to/git-repo --lfsurl ssh://git@example.com/srv/git/repo.git --mount /mnt/lfs
+```
+
+> 💡 若未通过 `--lfsurl` 或配置文件指定 URL，LFSFuse 会自动从 Git 仓库的 `lfs.url` 配置读取；若也未配置，则会尝试从 `git remote origin` 推断 SSH 地址。
 
 ## 使用指南
 
@@ -138,14 +153,18 @@ LFSFuse 支持多种参数传递方式，按优先级从高到低为：
 lfsfuse [flags]
 ```
 
+> 💡 `--lfsurl` 同时支持 HTTP/HTTPS 和 SSH 协议。若不指定，程序会自动从 Git 仓库的 `lfs.url` 配置读取；若也未配置，则会尝试从 `git remote origin` 推断 SSH 地址。
+
 | 标志 | 简写 | 说明 | 必需 |
 |------|------|------|------|
 | `--repo` | `-r` | 本地 Git 仓库路径 | ✅ |
-| `--lfsurl` | `-u` | LFS 存储服务的 HTTP URL | ❌（可选，默认从 Git 仓库配置读取） |
+| `--lfsurl` | `-u` | LFS 存储服务 URL，支持 HTTP/HTTPS 和 SSH 协议 | —（可选，默认从 Git 仓库配置读取或从 remote origin 推断） |
 | `--mount` | `-m` | 挂载点目录 | ✅ |
-| `--config` | `-c` | 配置文件路径（YAML/JSON/TOML） | ❌ |
-| `--version` | `-v` | 显示版本信息 | ❌ |
-| `--help` | `-h` | 显示帮助信息 | ❌ |
+| `--config` | `-c` | 配置文件路径（YAML/JSON/TOML） | — |
+| `--version` | `-v` | 显示版本信息 | — |
+| `--help` | `-h` | 显示帮助信息 | — |
+
+> #### 注意：HTTP/HTTPS 协议是 GIT LFS 专用服务器的地址，不是仓库 https 地址！
 
 ### 配置文件
 
@@ -155,7 +174,8 @@ LFSFuse 支持从配置文件中读取参数。配置文件可选用 YAML、JSON
 
 ```yaml
 repo: /path/to/git-repo
-lfsurl: https://lfs.example.com
+lfsurl: https://lfs.example.com          # HTTP/HTTPS 协议
+# lfsurl: ssh://git@example.com/srv/git/repo.git  # SSH 协议（可选）
 mount: /mnt/lfs
 ```
 
@@ -196,7 +216,12 @@ httpd -listen "[::0]:8080" --path ./lfs-storage
 mkdir -p /mnt/lfs
 
 # 方式 A：使用命令行标志（推荐）
+
+# HTTP/HTTPS 协议
 lfsfuse --repo /path/to/git-repo --lfsurl http://localhost:8080 --mount /mnt/lfs
+
+# SSH 协议
+lfsfuse --repo /path/to/git-repo --lfsurl ssh://git@example.com/srv/git/repo.git --mount /mnt/lfs
 
 # 方式 B：使用配置文件
 lfsfuse --config ./lfs-config.yaml
@@ -285,6 +310,24 @@ Range: bytes=<start>-<end>
 - **流式支持**：支持文件的随机访问和部分读取
 - **兼容性强**：绝大多数 HTTP 存储服务（S3、MinIO、WebDAV 等）都支持 Range 请求
 
+### SSH 协议支持
+
+除 HTTP/HTTPS 外，LFSFuse 还支持通过 SSH 协议从远程服务器读取 LFS 对象。
+
+```
+ssh://[user@]host[:port]/path/to/repo.git
+```
+
+SSH 协议的工作原理：
+- **远程命令执行**：通过 `ssh` 命令在远程服务器上执行 `cat` 或 `dd` 命令读取 LFS 对象文件
+- **范围读取**：利用 `dd` 命令的 `skip` 和 `count` 参数实现类似 HTTP Range 的范围读取
+- **自动推断**：若未配置 `lfs.url`，LFSFuse 会自动从 Git remote origin 推断 SSH 地址
+
+SSH 协议的优势：
+- **无需额外服务**：直接利用 Git 服务器的 SSH 访问能力，无需部署 HTTP 文件服务
+- **安全认证**：复用 SSH 密钥认证，无需额外配置
+- **兼容 Git 工作流**：与 Git 自身的 SSH 传输机制一致，开箱即用
+
 ### 只读挂载
 
 LFSFuse 使用 FUSE 的只读挂载选项，确保：
@@ -298,7 +341,7 @@ LFSFuse 使用 FUSE 的只读挂载选项，确保：
 ### Q: 为什么挂载后 LFS 文件大小为 0？
 
 A: 请确认 LFS 端点 URL 正确，并且网络可以访问该端点。LFSFuse 解析指针文件后，文件大小来自指针文件中的 `size` 字段。
-本质上，只要是符合 LFS 的指针文件，即使不是 git 仓库，只要 `--lfsurl` 参数所在的服务器 `http` 服务下 `oid` 的文件，就可以正常工作。
+本质上，只要是符合 LFS 的指针文件，即使不是 git 仓库，只要 `--lfsurl` 参数指向的服务（HTTP 或 SSH）下存在对应 `oid` 的文件，就可以正常工作。
 
 ### Q: 支持写入文件吗？
 
